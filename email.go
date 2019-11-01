@@ -601,6 +601,15 @@ func headerToBytes(buff io.Writer, header textproto.MIMEHeader) {
 			switch {
 			case field == "Content-Type" || field == "Content-Disposition":
 				buff.Write([]byte(subval))
+			case field == "From":
+				// specific handling of the from field due to spaces being replaced with underscores
+				s := strings.Split(subval, " ")
+				if len(s) > 0 {
+					for k, v := range s {
+						s[k] = mime.QEncoding.Encode("UTF-8", v)
+					}
+				}
+				buff.Write([]byte(strings.Join(s, " ")))
 			default:
 				buff.Write([]byte(mime.QEncoding.Encode("UTF-8", subval)))
 			}

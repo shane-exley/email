@@ -18,7 +18,7 @@ The ```email``` package currently supports the following:
 *  More to come!
 
 ### Installation
-```go get github.com/jordan-wright/email```
+```go get github.com/shane-exley/email```
 
 *Note: Version > 1 of this library requires Go v1.5 or above.*
 
