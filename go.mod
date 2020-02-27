@@ -1,1 +1,1 @@
-module github.com/jordan-wright/email
+module github.com/shane-exley/email
