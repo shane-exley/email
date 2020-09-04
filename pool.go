@@ -3,13 +3,10 @@ package email
 import (
 	"crypto/tls"
 	"errors"
-	"io"
 	"net"
 	"net/mail"
 	"net/smtp"
-	"net/textproto"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -28,7 +25,6 @@ type Pool struct {
 
 type client struct {
 	*smtp.Client
-	failCount int
 }
 
 type timestampedErr struct {
@@ -95,36 +91,6 @@ func (p *Pool) get(timeout time.Duration) *client {
 		case <-p.closing:
 			return nil
 		}
-	}
-}
-
-func shouldReuse(err error) bool {
-	// certainly not perfect, but might be close:
-	//  - EOF: clearly, the connection went down
-	//  - textproto.Errors were valid SMTP over a valid connection,
-	//    but resulted from an SMTP error response
-	//  - textproto.ProtocolErrors result from connections going down,
-	//    invalid SMTP, that sort of thing
-	//  - syscall.Errno is probably down connection/bad pipe, but
-	//    passed straight through by textproto instead of becoming a
-	//    ProtocolError
-	//  - if we don't recognize the error, don't reuse the connection
-	// A false positive will probably fail on the Reset(), and even if
-	// not will eventually hit maxFails.
-	// A false negative will knock over (and trigger replacement of) a
-	// conn that might have still worked.
-	if err == io.EOF {
-		return false
-	}
-	switch err.(type) {
-	case *textproto.Error:
-		return true
-	case *textproto.ProtocolError, textproto.ProtocolError:
-		return false
-	case syscall.Errno:
-		return false
-	default:
-		return false
 	}
 }
 
@@ -200,7 +166,7 @@ func (p *Pool) build() (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &client{cl, 0}
+	c := &client{cl}
 
 	if _, err := startTLS(c, p.tlsConfig); err != nil {
 		c.Close()
@@ -215,34 +181,6 @@ func (p *Pool) build() (*client, error) {
 	}
 
 	return c, nil
-}
-
-func (p *Pool) maybeReplace(err error, c *client) {
-	if err == nil {
-		c.failCount = 0
-		p.replace(c)
-		return
-	}
-
-	c.failCount++
-	if c.failCount >= maxFails {
-		goto shutdown
-	}
-
-	if !shouldReuse(err) {
-		goto shutdown
-	}
-
-	if err := c.Reset(); err != nil {
-		goto shutdown
-	}
-
-	p.replace(c)
-	return
-
-shutdown:
-	p.dec()
-	c.Close()
 }
 
 func (p *Pool) failedToGet(startTime time.Time) error {
@@ -271,7 +209,16 @@ func (p *Pool) Send(e *Email, timeout time.Duration) (err error) {
 	}
 
 	defer func() {
-		p.maybeReplace(err, c)
+		// if we had no error then we can just re use this connection by adding
+		// it back into the pool otherwise we kill the connection and a new one
+		// will be issued upon demand
+		if err == nil {
+			p.replace(c)
+			return
+		}
+
+		p.dec()
+		c.Close()
 	}()
 
 	recipients, err := addressLists(e.To, e.Cc, e.Bcc)
